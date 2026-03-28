@@ -2,6 +2,7 @@ import requests
 import random
 import time
 import numpy as np
+import pandas as pd
 from multiprocessing import Pool
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
@@ -18,6 +19,12 @@ import os
 
 # 导入六爻纳甲系统
 from liuyao_najia import LiuYaoNaJia
+
+# 导入三底共振模块
+from 三底共振 import ThreeBottomDetectorEnhanced, MacroDataFetcher, IndexValuationFetcher, FundDataFetcher
+
+# 导入反共识交易模块
+from anti_consensus import AntiConsensusSignal, IntegratedDecisionEngine
 
 # ================== 配置 ==================
 FUND_CODE = '002611'  # 主基金（博时黄金C）
@@ -1696,9 +1703,49 @@ def calculate_volume_score(volume, price_change=None):
     else:
         return 0.0
 
+def get_current_gold_price():
+    """获取当前黄金价格"""
+    try:
+        # 新浪财经黄金价格接口
+        url = 'https://finance.sina.com.cn/futures/quotes/GC.shtml'
+        resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=5)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        # 查找价格元素
+        price_elem = soup.find('span', class_='price')
+        if price_elem:
+            return price_elem.get_text().strip()
+        # 备用选择器
+        for elem in soup.find_all(['div', 'span']):
+            text = elem.get_text().strip()
+            if text and '$' in text and '.' in text:
+                parts = text.split('$')
+                if len(parts) > 1:
+                    price = parts[1].split()[0]
+                    if price.replace('.', '').isdigit():
+                        return f'${price}'
+        return None
+    except Exception as e:
+        print(f"  获取黄金价格失败: {e}")
+        return None
+
 def get_news():
     """获取黄金相关新闻 - 使用更专业的新闻源"""
     news_list = []
+    
+    # 自适应搜索策略 - 模仿OpenScholar的自适应搜索
+    # 动态生成搜索关键词，覆盖不同维度的黄金相关新闻
+    search_queries = [
+        '黄金价格 最新',
+        '美联储 加息 黄金',
+        '美元指数 黄金',
+        '通胀 黄金',
+        '地缘政治 黄金',
+        '央行 黄金储备',
+        '黄金 ETF',
+        '黄金 技术分析',
+        '黄金 投资策略',
+        '黄金 市场情绪'
+    ]
     
     # 源1：新浪财经黄金要闻
     try:
@@ -1716,40 +1763,128 @@ def get_news():
     except Exception as e:
         print(f"  新浪财经新闻获取失败: {e}")
     
-    # 源2：华尔街见闻黄金板块
+    # 源2：新浪财经黄金要闻备用
+    if len(news_list) < 3:
+        try:
+            url = 'https://finance.sina.com.cn/gold/'
+            resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=8)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            for item in soup.find_all('a', href=True):
+                title = item.get_text().strip()
+                if title and len(title) > 10 and any(keyword in title for keyword in ['黄金', '金价', '美联储', '美元', '通胀', '加息', '降息']):
+                    news_list.append(title)
+                    if len(news_list) >= 5:
+                        break
+        except Exception as e:
+            print(f"  新浪财经备用新闻获取失败: {e}")
+    
+    # 源3：华尔街见闻黄金板块
     if len(news_list) < 3:
         try:
             url = 'https://wallstreetcn.com/news/gold'
             resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=8)
             soup = BeautifulSoup(resp.text, 'html.parser')
-            for item in soup.find_all(['h2', 'h3', 'a'], class_=lambda x: x and 'title' in str(x).lower()):
+            # 调整选择器，寻找所有标题
+            for item in soup.find_all(['h2', 'h3', 'a']):
                 title = item.get_text().strip()
                 if title and len(title) > 10 and any(keyword in title for keyword in ['黄金', '金价', '美联储', '美元']):
                     news_list.append(title)
                     if len(news_list) >= 5:
                         break
-        except:
-            pass
+        except Exception as e:
+            print(f"  华尔街见闻新闻获取失败: {e}")
     
-    # 源3：东方财富黄金资讯
+    # 源4：东方财富黄金资讯
     if len(news_list) < 3:
         try:
             url = 'https://finance.eastmoney.com/a/cgnjj.html'
             resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=8)
             soup = BeautifulSoup(resp.text, 'html.parser')
-            for item in soup.find_all('a', title=True):
-                title = item['title'].strip()
-                if title and any(keyword in title for keyword in ['黄金', '金价', '贵金属']):
+            # 调整选择器，寻找所有新闻标题
+            for item in soup.find_all('a', href=True):
+                title = item.get_text().strip()
+                if title and len(title) > 10 and any(keyword in title for keyword in ['黄金', '金价', '贵金属']):
                     news_list.append(title)
                     if len(news_list) >= 5:
                         break
-        except:
-            pass
+        except Exception as e:
+            print(f"  东方财富新闻获取失败: {e}")
+    
+    # 源5：百度新闻黄金 - 自适应搜索
+    if len(news_list) < 3:
+        try:
+            # 使用自适应搜索策略，动态调整搜索关键词
+            for query in search_queries:
+                url = f'https://news.baidu.com/ns?word={query}&tn=news&from=news&cl=2&rn=10'
+                resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=8)
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                for item in soup.find_all(['h3', 'a']):
+                    title = item.get_text().strip()
+                    if title and len(title) > 10:
+                        news_list.append(title)
+                        if len(news_list) >= 5:
+                            break
+                if len(news_list) >= 5:
+                    break
+        except Exception as e:
+            print(f"  百度新闻自适应搜索失败: {e}")
+    
+    # 源6：腾讯财经黄金新闻
+    if len(news_list) < 3:
+        try:
+            url = 'https://finance.qq.com/gold/'
+            resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=8)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            for item in soup.find_all('a', href=True):
+                title = item.get_text().strip()
+                if title and len(title) > 10 and any(keyword in title for keyword in ['黄金', '金价', '美联储', '美元']):
+                    news_list.append(title)
+                    if len(news_list) >= 5:
+                        break
+        except Exception as e:
+            print(f"  腾讯财经新闻获取失败: {e}")
+    
+    # 源7：自适应增强搜索 - 模仿OpenScholar的动态搜索
+    if len(news_list) < 3:
+        try:
+            print("  执行自适应增强搜索...")
+            # 根据当前市场热点动态调整搜索
+            # 先获取当前黄金价格和市场情绪
+            current_price = get_current_gold_price()
+            if current_price:
+                # 动态生成更精准的搜索关键词
+                enhanced_queries = [
+                    f'黄金价格 {current_price}',
+                    '黄金 暴涨',
+                    '黄金 暴跌',
+                    '黄金 趋势'
+                ]
+                for query in enhanced_queries:
+                    url = f'https://news.baidu.com/ns?word={query}&tn=news&from=news&cl=2&rn=5'
+                    resp = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=5)
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    for item in soup.find_all(['h3', 'a']):
+                        title = item.get_text().strip()
+                        if title and len(title) > 10:
+                            news_list.append(title)
+                            if len(news_list) >= 5:
+                                break
+                    if len(news_list) >= 5:
+                        break
+        except Exception as e:
+            print(f"  自适应增强搜索失败: {e}")
     
     # 去重
     news_list = list(dict.fromkeys(news_list))
     
-    return news_list[:5] if news_list else ["暂无相关新闻"]
+    # 过滤乱码和无效标题
+    filtered_news = []
+    for title in news_list:
+        # 检查是否包含有效中文字符
+        if any('\u4e00' <= char <= '\u9fff' for char in title):
+            filtered_news.append(title)
+    
+    return filtered_news[:5] if filtered_news else ["暂无相关新闻"]
 
 def throw_coins():
     coins = [random.randint(0, 1) for _ in range(3)]
@@ -2210,6 +2345,40 @@ def run_full_analysis():
         print("  成交量数据不足，跳过分析")
         volume = None
 
+    # 三底共振检测
+    print("\n📊 【三底共振检测】")
+    net_values = get_history_net_value(FUND_CODE, days=HISTORY_DAYS)
+    if net_values and len(net_values) >= 30:
+        # 转换为DataFrame格式
+        df = pd.DataFrame({
+            '日期': pd.date_range(end=pd.Timestamp.now(), periods=len(net_values), freq='D'),
+            '收盘价': net_values,
+            '成交量': volume[-len(net_values):] if volume else [0]*len(net_values)
+        })
+        # 构建基金信息字典
+        fund_info = {'code': FUND_CODE, 'name': '博时黄金C', 'type': '商品ETF'}
+        macro_fetcher = MacroDataFetcher()
+        detector = ThreeBottomDetectorEnhanced(df, fund_info, macro_fetcher)
+        three_bottom_signal = detector.get_final_signal()
+        
+        print(f"  交易信号: {three_bottom_signal.get('交易信号', '无信号')}")
+        print(f"  底部数量: {three_bottom_signal.get('底部数量', 0)}")
+        print(f"  平均置信度: {three_bottom_signal.get('平均置信度', 0):.2f}")
+        
+        # 保存三底信号供后续使用
+        three_bottom_score = 0
+        if three_bottom_signal.get('交易信号') == '🔥 强烈买入':
+            three_bottom_score = 1.0
+        elif three_bottom_signal.get('交易信号') == '📈 买入':
+            three_bottom_score = 0.5
+        elif three_bottom_signal.get('交易信号') == '🤏 持有':
+            three_bottom_score = 0.0
+        else:
+            three_bottom_score = -0.5
+    else:
+        print("  历史净值数据不足，跳过三底共振检测")
+        three_bottom_score = 0
+
     # 量子纠缠分析
     print("\n🔬 【量子纠缠分析】")
     print(f"  正在获取 {len(RELATED_FUNDS)} 只关联基金的历史数据...")
@@ -2427,7 +2596,8 @@ def run_full_analysis():
             abs_adjustment = 0.3 * gua_confidence
             print(f"\n🚀 【绝对判断】{abs_dir} (可信度{gua_confidence:.0%}，信号增强)")
         else:
-
+            # 不满足绝对判断增强条件
+            pass
 
     # 综合建议（改进版 - 整合宏观因子和风险平价）
     print("\n💡 【赛博算命结论（宏观增强版）】")
@@ -2498,6 +2668,39 @@ def run_full_analysis():
             total_score += 0.3
         elif change < -1.0:
             total_score -= 0.3
+
+    # 三底信号融入综合得分
+    total_score += three_bottom_score * 0.1
+
+    # 反共识交易信号生成
+    print("\n🤝 【反共识交易信号】")
+    price_series = net_values if net_values else []
+    volume_series = volume if volume else []
+    gua_name = liuyao_prediction.get('gua_name', '') if 'liuyao_prediction' in dir() and liuyao_prediction else ''
+    gua_confidence = liuyao_prediction.get('gua_analysis', {}).get('confidence', 0.5) if 'liuyao_prediction' in dir() and liuyao_prediction else 0.5
+    
+    anti_consensus = AntiConsensusSignal()
+    anti_signal = anti_consensus.generate_signal(
+        prices=price_series,
+        volumes=volume_series,
+        gua_name=gua_name,
+        gua_confidence=gua_confidence
+    )
+    
+    print(f"  反共识信号: {anti_signal.get('action', 'hold')}")
+    print(f"  仓位建议: {anti_signal.get('position', 0.0):.2f}")
+    
+    # 将反共识信号融入综合决策
+    if anti_signal.get('action') == 'buy' and total_score > 0:
+        total_score += 0.3  # 增强看多
+        print("  信号增强: 反共识看多与主信号一致，增强看多")
+    elif anti_signal.get('action') == 'sell' and total_score < 0:
+        total_score -= 0.3  # 增强看空
+        print("  信号增强: 反共识看空与主信号一致，增强看空")
+    elif anti_signal.get('action') != 'hold' and abs(total_score) < 0.5:
+        # 信号矛盾，降低仓位
+        position_factor = 0.5
+        print("  信号矛盾: 反共识信号与主信号矛盾，降低仓位")
 
     # 生成交易信号
     global trading_strategy, confidence_calculator, market_state_detector
